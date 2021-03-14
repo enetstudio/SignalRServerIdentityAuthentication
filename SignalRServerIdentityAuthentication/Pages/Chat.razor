@@ -1,0 +1,171 @@
+﻿@page "/chat"
+
+
+@attribute [Authorize]
+
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.AspNetCore.SignalR
+
+@using SignalRServerIdentityAuthentication.Hubs
+
+@inject NavigationManager NavigationManager
+
+
+@using System.Net.Http
+@using System.Net.Http.Json
+
+@using System;
+
+@using System.Net.Http.Headers;
+@using System.Threading.Tasks;
+@using Microsoft.AspNetCore.Http.Connections;
+@using System.Net
+
+
+@implements IAsyncDisposable
+
+<p>@messageForBoard</p>
+<hr />
+
+<div>
+    <label for="user">User:</label>
+    <span id="user">@userName</span>
+</div>
+<div class="form-group">
+    <label for="messageInput">Message:</label>
+    <input onfocus="this.select();" @ref="elementRef" id="messageInput" @bind="messageInput" class="form-control my-input"/>
+</div>
+
+<div>
+
+<button @onclick="Send" disabled="@(!IsConnected)" class="btn btn-outline-secondary">Send Message</button>
+
+@if (UserList != null)
+    {
+        <select id="user-list" @bind="selectedUser">
+            <option value="">All.....</option>
+            @foreach (var user in UserList)
+            {
+                <option value="@user">@user</option>
+            }
+        </select>
+    }
+
+
+ </div>
+
+ <div>
+    <label for="messagesList">Public Message Board:</label>
+    <ul id="messagesList">
+       @foreach (var message in messages)
+       {
+          <li>@message</li>
+       }
+    </ul>
+</div>
+
+<div>
+    <label for="private-messages-list">Private Message Board:</label>
+    <ul id="private-messages-list">
+       @foreach (var message in privateMessages)
+       {
+          <li>@message</li>
+       }
+    </ul>
+</div>
+
+@code {
+   
+    HubConnection hubConnection;
+    private List<string> messages = new List<string>();
+    private List<string> privateMessages = new List<string>();
+    private string messageForBoard;
+    private string userName;
+    private string messageInput;
+    private string selectedUser;
+    private List<string> UserList;
+
+    private ElementReference elementRef;
+
+    [Inject]
+    public CookiesProvider CookiesProvider { get; set; }
+  
+
+    protected override async Task OnInitializedAsync()
+    {
+        var container = new CookieContainer();
+        var cookie = new Cookie() 
+         {
+             Name = ".AspNetCore.Identity.Application", 
+             Domain = "localhost",
+             Value = CookiesProvider.Cookie
+         };
+
+         container.Add(cookie);
+
+         hubConnection = new HubConnectionBuilder()
+        .WithUrl(NavigationManager.ToAbsoluteUri("/chathub"), options => 
+        {
+            options.Cookies = container; 
+        }).Build();
+
+        hubConnection.On<string, string>("ReceiveMessage", (user, message) =>
+        {
+            var encodedMsg = $"{user}: {message}";
+            messages.Add(encodedMsg);
+           InvokeAsync(() => StateHasChanged());
+        });
+
+        hubConnection.On<string>("ReceiveUserName", (name) =>
+        {
+            userName = name;
+
+            InvokeAsync(() => StateHasChanged());
+        });
+
+         hubConnection.On<string>("MessageBoard", (message) =>
+        {
+            messageForBoard = message;
+
+           InvokeAsync(() => StateHasChanged());
+        });
+
+        hubConnection.On<string, string>("ReceivePrivateMessage", (user, message) =>
+        {
+            var encodedMsg = $"{user}: {message}";
+            privateMessages.Add(encodedMsg);
+
+            InvokeAsync(() => StateHasChanged());
+        });
+
+        hubConnection.On<List<string>>("ReceiveInitializeUserList", ( list) =>
+        {
+            UserList = list ;
+
+            InvokeAsync(() => StateHasChanged());
+        });
+
+
+        await hubConnection.StartAsync();
+        await hubConnection.InvokeAsync("InitializeUserList");
+            
+    }
+    protected override void OnAfterRender(bool firstRender)
+    {
+         elementRef.FocusAsync();
+    }
+  
+   async Task Send() => await hubConnection.SendAsync("SendMessage", selectedUser, messageInput);
+
+   public bool IsConnected => hubConnection.State == HubConnectionState.Connected;
+
+    public void Dispose()
+    {
+       hubConnection.DisposeAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await hubConnection.DisposeAsync();
+    }
+}
