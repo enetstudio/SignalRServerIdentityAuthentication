@@ -23,84 +23,69 @@ namespace SignalRServerIdentityAuthentication.Hubs
     [Authorize()]
     public class ChatHub : Hub
     {
-        private static List<ConnectedUser> connectedUsers = new List<ConnectedUser>();
+        private readonly static ConnectionMapping<string> _connections = new ConnectionMapping<string>();
+
         public async Task InitializeUserList() 
         {
-            var list = (from user in connectedUsers
-                       select user.Name ).ToList();
+            var list = _connections.GetUsers();
 
             await Clients.All.SendAsync("ReceiveInitializeUserList", list);
         }
         public async Task SendMessage(string userID, string message)
         {
+            string name = Context.User.Identity.Name;
+
             if (string.IsNullOrEmpty(userID)) // If All selected
             {
-                await Clients.All.SendAsync("ReceiveMessage", Context.User.Identity.Name ?? "anonymous", message);
+                var users = _connections.GetUsers();
+
+                foreach (var user in users)
+                {
+                    foreach (var connectionId in _connections.GetConnections(user))
+                    {
+                        await Clients.Client(connectionId).SendAsync("ReceiveMessage", Context.User.Identity.Name ?? "anonymous", message);
+                    }
+                }
             }
             else
             {
-                var userIdentifier = (from _connectedUser in connectedUsers
-                                      where _connectedUser.Name == userID
-                                      select _connectedUser.UserIdentifier).FirstOrDefault();
-
-                await Clients.User(userIdentifier).SendAsync("ReceivePrivateMessage",
-                                       Context.User.Identity.Name ?? "anonymous", message);
+                foreach (var connectionId in _connections.GetConnections(userID))
+                {
+                    await Clients.Client(connectionId).SendAsync("ReceivePrivateMessage",
+                                           Context.User.Identity.Name ?? "anonymous", message);
+                }
             }
 
         }
 
         public override async Task OnDisconnectedAsync(Exception exception)
         {
-           
-            var user = connectedUsers.Where(cu => cu.UserIdentifier == Context.UserIdentifier).FirstOrDefault();
 
-            var connection = user.Connections.Where(c => c.ConnectionID == Context.ConnectionId).FirstOrDefault();
-            var count = user.Connections.Count;
+            string name = Context.User.Identity.Name;
 
-            if(count == 1) // A single connection: remove user
-            {
-                connectedUsers.Remove(user);
+            _connections.Remove(name, Context.ConnectionId);
 
-            }
-            if (count > 1) // Multiple connection: Remove current connection
-            {
-                user.Connections.Remove(connection);
-            }
+            var list = _connections.GetUsers();
 
-            var list = (from _user in connectedUsers
-                        select new { _user.Name }).ToList();
+            await Clients.All.SendAsync("ReceiveInitializeUserList", list);
 
-           await Clients.All.SendAsync("ReceiveInitializeUserList", list);
+            await Clients.All.SendAsync("MessageBoard",
+                        $"{Context.User.Identity.Name}  has left");
 
-           await   Clients.All.SendAsync("MessageBoard", 
-                      $"{Context.User.Identity.Name}  has left");
-        
         }
 
        
         public override async Task OnConnectedAsync()
         {
-            var user = connectedUsers.Where(cu => cu.UserIdentifier == Context.UserIdentifier).FirstOrDefault();
+            string name = Context.User.Identity.Name;
 
-            if (user == null) // User does not exist
-            {
-                ConnectedUser connectedUser = new ConnectedUser
-                {
-                    UserIdentifier = Context.UserIdentifier,
-                    Name = Context.User.Identity.Name,
-                    Connections = new List<Connection> { new Connection { ConnectionID = Context.ConnectionId } }
-                };
-
-                connectedUsers.Add(connectedUser);
-            }
-            else
-            {
-                user.Connections.Add(new Connection { ConnectionID = Context.ConnectionId });
-            }
+            _connections.Add(name, Context.ConnectionId);
 
             await Clients.All.SendAsync("MessageBoard", $"{Context.User.Identity.Name}  has joined");
 
-            await  Clients.Client(Context.ConnectionId).SendAsync("ReceiveUserName", Context.User.Identity.Name);
+            await Clients.Client(Context.ConnectionId).SendAsync("ReceiveUserName", Context.User.Identity.Name);
+
+            await Task.CompletedTask;
         }
      }
 }
